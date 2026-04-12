@@ -10,7 +10,7 @@ documentation = "https://docs.rs/activity-manager"
 readme = "README.md"
 license = "MIT"
 keywords = ["gui", "router", "activity", "navigation", "ui-framework"]
-categories = ["gui", "rust-patterns", "state-machines"]
+categories = ["gui"]
 
 [dependencies]
 log = "0.4"
