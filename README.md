@@ -2,195 +2,154 @@
 
 [![Crates.io](https://img.shields.io/crates/v/activity-manager.svg)](https://crates.io/crates/activity-manager)
 [![Documentation](https://docs.rs/activity-manager/badge.svg)](https://docs.rs/activity-manager)
-[![License](https://img.shields.io/crates/l/activity-manager.svg)](https://github.com/paulzhang5511/activity-manager)
 
-**Activity Manager** is a UI-agnostic, Android-style activity and routing stack manager for Rust. 
-它是一个无 UI 框架依赖的通用 Android 风格页面（Activity）与路由堆栈管理框架。
+**Activity Manager** 是一个为 Rust 设计的、无 UI 框架依赖的通用 Android 风格页面（Activity）与路由堆栈管理框架。
 
-本框架通过 `ActivityHost` 抽象了底层的 UI 渲染和事件循环机制，使得核心的路由调度和生命周期管理逻辑可以独立于特定的 UI 框架（如 Iced）运行。
+它通过抽象底层 UI 渲染和事件循环，使得核心的路由调度逻辑可以独立运行。特别地，它利用 **GAT (Generic Associated Types)** 和 **任务聚合 (Task Batching)** 深度优化了对现代纯函数式 UI 框架（如 **Iced**、Dioxus 等）的支持，完美解决了视图生命周期绑定和异步副作用管理的痛点。
 
-## 🌟 核心特性 (Core Features)
+## ✨ 核心特性
 
-* **高度解耦 (UI-Agnostic)**: 完全剥离具体 UI 框架依赖，通过 `ActivityHost` Trait 适配任意 UI 库。
-* **生命周期管理 (Lifecycle)**: 提供 `on_create`, `on_resume`, `on_pause`, `on_destroy`, `on_new_intent` 等完整的生命周期流转。
-* **经典启动模式 (Launch Modes)**: 完美还原 Android 的四种经典启动模式：
-  * `Standard`: 标准新建模式
-  * `SingleTop`: 栈顶复用模式
-  * `SingleTask`: 栈内复用模式 (Clear Top)
-  * `SingleInstance`: 全局单例独占模式
-* **半透明叠加渲染 (Painter's Algorithm)**: 原生支持 Dialog 风格的半透明页面叠加，智能阻断底层被遮挡页面的无效渲染与无效事件订阅。
-* **依赖注入 (DI)**: 在 Activity 创建时通过工厂闭包自动注入全局 Context。
+* 🤖 **Android 风格的启动模式**：内置完整、严格的四种路由堆栈调度模式：
+  * `Standard` (标准模式)
+  * `SingleTop` (栈顶复用)
+  * `SingleTask` (栈内复用，Clear Top)
+  * `SingleInstance` (全局单例)
+* 🎨 **画家算法 (Painter's Algorithm) 渲染层**：原生支持半透明弹窗页面 (Dialog)，在渲染时自动向下探查，阻断底层被完全遮挡页面的无效渲染构建。
+* 🔄 **GAT 生命周期零拷贝**：彻底告别为了满足 UI 框架生命周期而四处 `.clone()` 的噩梦。允许页面的视图构建函数 (`view`) 直接以引用的方式读取 Activity 状态。
+* ⚡ **异步任务聚合器**：通过统一的 `Task` 单元元，将页面跳转过程中触发的多个生命周期钩子（如旧页面的销毁、新页面的创建等）产生的异步副作用完美打包合并。
 
-## 📦 安装 (Installation)
+## 📦 安装
 
-在你的 `Cargo.toml` 中添加：
+在你的 `Cargo.toml` 中添加依赖：
 
 ```toml
 [dependencies]
-activity-manager = "0.1.0"
-````
-
-或者使用命令快速添加：
-
-```bash
-cargo add activity-manager
+activity-manager = "0.1.1"
 ```
 
-## 📖 完整使用指南 (Usage Guide)
+> **注意**：`activity-manager` 核心库本身极其轻量，仅依赖 `log` 库，不对你的项目强加任何具体的 UI 引擎。
 
-Activity Manager 的核心思想是\*\*“托管”\*\*。你需要将它嵌入到你所使用的具体 UI 框架（如 Iced 等）的主状态机中。以下演示如何在一个典型的应用生命周期中集成并使用本框架。
+## 🚀 快速体验 (Examples)
 
-### 1\. 定义你的环境：Host 与 Route
+框架内置了基于 **Iced 0.14** 的完整应用示例，展示了路由跳转、生命周期任务聚合以及半透明弹窗的实现。
 
-首先，告诉框架你所使用的 UI 底层类型（Host）以及你的页面路由表（Route）。
+在克隆本仓库后，直接在根目录下运行：
+
+```bash
+RUST_LOG=info cargo run --example iced_demo
+```
+*(设置 `RUST_LOG=info` 可以在终端中实时观察页面生命周期的变化规律)*
+
+## 📖 核心架构与使用指南
+
+要在你的 UI 项目中接入 `Activity Manager`，只需遵循以下三个步骤：
+
+### 1. 定义宿主环境 (`ActivityHost`)
+你需要告诉框架，你的应用使用的是什么消息 (`Message`)、什么上下文 (`Context`)、以及你的 UI 引擎如何描述视图 (`View`) 和异步任务 (`Task`)。
 
 ```rust
-use activity_manager::{ActivityHost, LaunchMode, Route};
+use activity_manager::{ActivityHost, Route, LaunchMode};
+use iced::{Element, Task};
 
-// 1. 定义 Host (以假设的某个 UI 框架为例)
-pub struct AppHost;
-impl ActivityHost for AppHost {
-    type View = String;            // 你的 UI 框架的视图类型 (如 iced::Element)
-    type Effect = ();              // 你的 UI 框架的异步任务类型 (如 iced::Task)
-    type Subscription = ();        // 订阅类型 (如 iced::Subscription)
-    type Message = AppMessage;     // 全局消息枚举
+// 定义全局状态
+pub struct GlobalContext {
+    pub user_name: String,
 }
 
-// 2. 定义全局消息
-#[derive(Debug, Clone)]
-pub enum AppMessage {
-    GoToSettings,
-    GoBack,
-    UserClickedButton,
-}
-
-// 3. 定义路由与启动模式
+// 定义路由
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppRoute {
     Home,
-    Settings,
+    Detail(String),
 }
 impl Route for AppRoute {
-    fn launch_mode(&self) -> LaunchMode {
-        match self {
-            AppRoute::Home => LaunchMode::SingleTask,
-            AppRoute::Settings => LaunchMode::Standard,
-        }
-    }
+    fn launch_mode(&self) -> LaunchMode { LaunchMode::Standard }
     fn is_translucent(&self) -> bool { false }
 }
+
+// 实现宿主桥接
+pub struct IcedHost;
+impl ActivityHost for IcedHost {
+    type Message = ();
+    type Context = GlobalContext;
+    type Route = AppRoute;
+    
+    // GAT 魔法：绑定生命周期，实现零拷贝渲染
+    type View<'a> = Element<'a, ()>; 
+    type Task = Task<()>;
+
+    fn empty_task() -> Self::Task { Task::none() }
+    fn batch_tasks(tasks: Vec<Self::Task>) -> Self::Task { Task::batch(tasks) }
+}
 ```
 
-### 2\. 编写你的 Activity (页面)
-
-每个页面都是一个独立的状态机，只需实现 `Activity` 接口：
+### 2. 编写页面组件 (`Activity`)
+实现 `Activity` trait，你可以获得类似 Android 的完整生命周期钩子（默认均返回空任务，按需重写即可）。
 
 ```rust
-use activity_manager::{Activity, Intent};
+use activity_manager::Activity;
+use iced::widget::text;
 
-// 共享的全局状态 (Context)
-#[derive(Clone)]
-pub struct AppContext {
-    pub user_token: String,
+pub struct HomeActivity {
+    welcome_text: String,
 }
 
-// 首页 Activity
-pub struct HomeActivity;
-impl Activity<AppRoute, AppHost, AppContext> for HomeActivity {
+impl Activity<IcedHost> for HomeActivity {
     fn route(&self) -> AppRoute { AppRoute::Home }
 
-    // 处理当前页面的逻辑
-    fn update(&mut self, message: AppMessage) -> Vec<()> {
-        match message {
-            AppMessage::UserClickedButton => {
-                println!("Button clicked on Home!");
-                vec![] // 返回 UI Effect / Task
-            }
-            _ => vec![]
-        }
+    // 生命周期钩子：创建时可派发网络请求等 Task
+    fn on_create(&mut self, _ctx: &mut GlobalContext) -> iced::Task<()> {
+        log::info!("首页创建！");
+        iced::Task::none()
     }
 
-    // 渲染当前页面的 UI
-    fn view(&self) -> String {
-        "<h1>Welcome Home</h1>".to_string()
+    // 视图渲染：直接借用 self 和 ctx 的数据，无需 clone
+    fn view<'a>(&'a self, ctx: &'a GlobalContext) -> Element<'a, ()> {
+        text(format!("{}，当前用户：{}", self.welcome_text, ctx.user_name)).into()
     }
-    
-    // 可选：实现 on_create, on_resume, on_pause 等生命周期钩子
 }
 ```
 
-### 3\. 在应用主循环中集成 Manager
-
-这是最关键的一步。你需要将 `ActivityManager` 存放在你应用的最顶层状态中，并将应用的 `update` 和 `view` 委托给 Manager。
+### 3. 驱动管理器 (`ActivityManager`)
+在你的主应用循环中，实例化 `ActivityManager` 并将 UI 的 `update` 和 `view` 逻辑委托给它。
 
 ```rust
-use activity_manager::{ActivityManager, Intent};
+use activity_manager::ActivityManager;
+use iced::widget::stack;
 
-// 你的应用根状态
-pub struct MyApplication {
-    manager: ActivityManager<AppRoute, AppHost, AppContext>,
+struct MyApp {
+    manager: ActivityManager<IcedHost>,
+    context: GlobalContext,
 }
 
-impl MyApplication {
-    /// 应用初始化
-    pub fn new() -> Self {
-        let context = AppContext { user_token: "123".to_string() };
-        
-        // 定义依赖注入工厂：根据 Route 创建对应的 Activity 实例
-        let factory = Box::new(|route: &AppRoute, _ctx: &AppContext| -> Box<dyn Activity<AppRoute, AppHost, AppContext>> {
-            match route {
-                AppRoute::Home => Box::new(HomeActivity),
-                AppRoute::Settings => /* Box::new(SettingsActivity) */ unimplemented!(),
-            }
-        });
-
-        // 启动初始页面 (Home)
-        let (manager, _initial_effects) = ActivityManager::new(AppRoute::Home, context, factory);
-
-        Self { manager }
+impl MyApp {
+    // Iced 的 update 循环
+    fn update(&mut self, message: ()) -> iced::Task<()> {
+        // 委托分发消息或执行页面跳转
+        self.manager.update(&mut self.context, message)
     }
 
-    /// 接管来自 UI 框架的消息流转
-    pub fn update(&mut self, message: AppMessage) -> Vec<()> {
-        let mut effects = Vec::new();
-
-        // 1. 处理全局级别的路由跳转
-        match message {
-            AppMessage::GoToSettings => {
-                let intent = Intent::new(AppRoute::Settings);
-                effects.extend(self.manager.start_activity(intent));
-                return effects; // 发生路由跳转时，拦截消息不再向下传递
-            }
-            AppMessage::GoBack => {
-                effects.extend(self.manager.back());
-                return effects;
-            }
-            _ => {}
-        }
-
-        // 2. 将非路由消息派发给当前处于栈顶的活跃 Activity 去处理
-        effects.extend(self.manager.update(message));
+    // Iced 的 view 循环
+    fn view(&self) -> Element<()> {
+        // Manager 会自动利用画家算法计算出可见的页面列表
+        let views = self.manager.views(&self.context);
         
-        effects
-    }
-
-    /// 接管视图渲染
-    pub fn view(&self) -> String {
-        // manager.views() 会返回当前需要渲染的页面层级（已处理半透明与遮挡逻辑）。
-        // 你需要使用你的 UI 框架的容器（如 Stack / ZStack）将它们从底到顶叠放起来。
-        let active_views: Vec<String> = self.manager.views();
-        
-        // 伪代码：将多个视图层叠渲染
-        format!("<Stack>\n{}\n</Stack>", active_views.join("\n"))
+        // 利用 Iced 的 stack 控件将页面层叠
+        stack(views).into()
     }
 }
 ```
 
-### 💡 核心工作流总结
+## 🧠 生命周期行为参考 (Lifecycle)
 
-1.  **渲染流**：UI 框架请求视图 -\> `MyApplication::view` -\> `manager.views()` -\> 获取活动页面的 `Activity::view` 组合并返回。
-2.  **事件流**：用户交互 -\> UI 框架触发 `AppMessage` -\> `MyApplication::update` -\> 拦截路由消息或透传给 `manager.update()` -\> 栈顶的 `Activity::update` 接收消息并更新自身状态。
+框架在页面跳转时会自动调度以下钩子函数，并收集其副作用（Task）：
 
-## 📄 协议 (License)
+* `on_create`: 页面实例被创建入栈。
+* `on_resume`: 页面进入前台，获取焦点。
+* `on_pause`: 页面被新页面覆盖，或即将出栈销毁。
+* `on_destroy`: 页面被彻底移出堆栈。
+* `on_new_intent`: 命中 `SingleTop` 或 `SingleTask` 时触发复用逻辑。
 
-[MIT](https://www.google.com/search?q=LICENSE-MIT) 
+## 📄 许可证 (License)
+
+本项目采用 [MIT License](LICENSE) 开源许可协议。
